@@ -1,0 +1,2 @@
+-r requirements-build.txt
+pypdf>=5,<7
