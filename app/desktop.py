@@ -460,7 +460,19 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.freight.set('0.00');self.extra_planks.set('0')
         self.invoice_required.set(False)
         self.refresh()
+        self.notify_exhausted_stock(key)
         self.show_note(key)
+
+    def notify_exhausted_stock(self, rental_id):
+        rows = self.db.rows('''SELECT DISTINCT i.name FROM items i
+            JOIN rental_lines l ON l.item_id=i.id
+            WHERE l.rental_id=? AND i.available=0 AND i.total>0 ORDER BY i.name''', (rental_id,))
+        if rows:
+            names = '\n'.join(f'• {row["name"]}' for row in rows)
+            messagebox.showwarning('Producto agotado',
+                'La renta se guardó correctamente. Se agotaron las unidades disponibles de:\n\n'
+                + names + '\n\nDisponibles: 0. No se pueden entregar más unidades hasta recibir devoluciones o aumentar el stock.',
+                parent=self)
 
     def make_clients(self):
         self.heading(self.tabs.tab('Clientes'), 'Directorio de clientes', 'Consulta sus datos, obras anteriores y reputación de pago, entrega y cuidado.')
@@ -515,6 +527,10 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
 
     def refresh(self):
         super().refresh()
+        self.inventory.tag_configure('exhausted', foreground='#AF3029', background='#FFF1EF')
+        for key, item in self.items.items():
+            if item['total'] > 0 and item['available'] == 0:
+                self.inventory.item(str(key), tags=('exhausted',))
         self.render_products()
         self.refresh_active()
         self.refresh_dashboard()

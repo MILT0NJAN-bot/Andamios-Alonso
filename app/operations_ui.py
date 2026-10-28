@@ -126,6 +126,7 @@ class OperationsUI:
             rental=self.service.start_reservation(key)
             self.refresh();self.navigate('Rentas activas')
             self.active_table.selection_set(str(rental))
+            self.notify_exhausted_stock(rental)
             self.show_note(rental)
 
     def cancel_selected_reservation(self):

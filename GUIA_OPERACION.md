@@ -63,6 +63,8 @@ Al terminar la jornada, usa **Guardar copia en otra ubicación** y guarda una co
 - Vuelve a exportar el **PDF** si hubo pagos, ampliaciones o devoluciones después de la nota anterior.
 # Flete, tablones extra y tablas
 
+Al guardar una renta o entregar una reservación que consume las últimas unidades disponibles, aparece **Producto agotado**, con los nombres de los equipos y disponibilidad cero. La renta ya está guardada; pulsa Aceptar para continuar. En Inventario, los equipos con stock registrado y sin unidades disponibles se resaltan en rojo. Al recibir devoluciones en buen estado o aumentar existencias, se actualiza el indicador. Una reservación pendiente no dispara esta alerta porque todavía no entrega material.
+
 En **Nueva Renta**, el bloque **Flete y tablones extra (opcionales)** permite capturar el importe de traslado acordado por la secretaria y la cantidad de tablones adicionales. Deja cero cuando no apliquen. Cada tablón extra cuesta $50 por pedido; estos cargos no se multiplican por días ni se cobran otra vez al ampliar. El tablón extra es un cargo adicional, no un movimiento del inventario de tablas para cimbra.
 
 El PDF desglosa ambos cargos antes del subtotal. Si se solicita factura, el IVA del 16% se aplica al subtotal completo, incluidos estos cargos. Las reservaciones conservan los importes al iniciar la renta.
