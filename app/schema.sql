@@ -22,6 +22,22 @@ CREATE TABLE IF NOT EXISTS addresses (
  id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id),
  address TEXT NOT NULL, UNIQUE(client_id, address)
 );
+CREATE TABLE IF NOT EXISTS client_billing (
+ client_id INTEGER PRIMARY KEY REFERENCES clients(id),
+ legal_name TEXT NOT NULL DEFAULT '', rfc TEXT NOT NULL DEFAULT '',
+ postal_code TEXT NOT NULL DEFAULT '', tax_regime TEXT NOT NULL DEFAULT '',
+ cfdi_use TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+ fiscal_address TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS client_documents (
+ id INTEGER PRIMARY KEY,
+ client_id INTEGER NOT NULL REFERENCES clients(id),
+ category TEXT NOT NULL, filename TEXT NOT NULL,
+ content BLOB NOT NULL, size_bytes INTEGER NOT NULL CHECK(size_bytes>0),
+ sha256 TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK(length(content)=size_bytes),
+ UNIQUE(client_id,category,sha256)
+);
 CREATE TABLE IF NOT EXISTS rentals (
  id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id),
  address_id INTEGER NOT NULL REFERENCES addresses(id),

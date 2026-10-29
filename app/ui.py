@@ -6,6 +6,7 @@ import customtkinter as ctk
 from .service import Service, money
 from .pricing import unit_total, tariff_label
 from .taxes import amounts
+from .client_files_ui import ClientBillingDialog
 
 
 class Application(ctk.CTk):
@@ -133,6 +134,14 @@ class Application(ctk.CTk):
         bar.pack(fill='x')
         ctk.CTkButton(bar,text='Registrar cliente',command=lambda:self.client_dialog()).pack(side='left',padx=5,pady=10)
         ctk.CTkButton(bar,text='Editar / ver direcciones',command=lambda:self.safe(lambda:self.client_dialog(self.selected(self.clients)))).pack(side='left',padx=5)
+        ctk.CTkButton(bar,text='Expediente para facturación',fg_color='#18865B',
+            command=lambda:self.safe(lambda:self.client_billing_dialog(self.selected(self.clients)))).pack(side='left',padx=5)
+        self.clients.bind('<Double-1>',lambda event:self.safe(lambda:self.client_billing_dialog(int(self.clients.identify_row(event.y))))
+                          if self.clients.identify_row(event.y) else None)
+        self.clients.bind('<Return>',lambda _:self.safe(lambda:self.client_billing_dialog(self.selected(self.clients))))
+
+    def client_billing_dialog(self, key):
+        return ClientBillingDialog(self, key)
 
     def refresh_clients(self):
         if not hasattr(self,'clients'):

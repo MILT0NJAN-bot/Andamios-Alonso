@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 from .pricing import unit_total, tariff_label, line_charge
 from .operations import Operations
 from .taxes import amounts,percent
+from .client_files import ClientFiles
 
 
 def cents(value):
@@ -19,7 +20,7 @@ def money(value):
     return f'${value / 100:,.2f}'
 
 
-class Service(Operations):
+class Service(Operations, ClientFiles):
     def __init__(self, db, tax_rates=(0,0)):
         self.db = db
         self.tax_rates=(tax_rates[0],0)

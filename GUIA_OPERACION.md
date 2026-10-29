@@ -2,7 +2,7 @@
 
 ## Antes de comenzar
 
-Abre `dist\AndamiosAlonso.exe` desde el Explorador de Windows. En **Inventario y precios**, verifica las existencias reales. **Disponible** son piezas listas para entregar; **En revisión** son piezas que se recibieron en mal estado y todavía no se pueden rentar.
+Abre **Andamios Alonso** desde el acceso del escritorio o el menú Inicio. Si usas la versión portátil, abre `dist\AndamiosAlonso.exe` desde el Explorador de Windows. En **Inventario y precios**, verifica las existencias reales. **Disponible** son piezas listas para entregar; **En revisión** son piezas que se recibieron en mal estado y todavía no se pueden rentar.
 
 ## Registrar una renta
 
@@ -12,6 +12,16 @@ Abre `dist\AndamiosAlonso.exe` desde el Explorador de Windows. En **Inventario y
 4. Revisa piezas, tarifas, fechas y total. Marca **Requiere factura** únicamente cuando el cliente la solicite: agregará IVA del 16%. Sin marcar, no se cobra IVA. No se cobra ISR. Para andamios el mínimo es una semana; usa los botones de duración rápida si te ayudan.
 5. Si recibiste dinero, captura el pago inicial y su método. Si no, déjalo en cero.
 6. Pulsa **Guardar renta y generar nota**. En la nota puedes pulsar **PDF** o **Pagos y saldo**.
+
+## Guardar documentos de un cliente y enviarlos a la contadora
+
+1. En **Clientes**, registra al cliente si aún no existe. Selecciona su fila y pulsa **Expediente para facturación** o haz doble clic en ella.
+2. En **Documentos**, elige **Constancia de situación fiscal**, **Comprobante de domicilio**, **INE · frente**, **INE · reverso**, **INE · ambos lados** u **Otros documentos**. Pulsa **Agregar archivos…** y selecciona las fotos o PDF recibidos (máximo 20 MB por archivo). Se guardan en ese momento, sin depender del archivo original.
+3. Si te dieron los datos por escrito, abre **Datos para factura** y captura lo disponible. Pulsa **Guardar datos para factura**. Puedes dejar campos y documentos pendientes.
+4. Pulsa **Exportar expediente ZIP** y elige dónde guardarlo. Incluye los documentos y una ficha de datos; también guarda los cambios que hayas escrito en la ficha. Envía ese ZIP a la contadora por tu medio habitual.
+5. Cuando el cliente vuelva, abre el mismo expediente y vuelve a exportarlo. Para renovar un documento, agrega el nuevo y usa **Quitar documento** en el anterior cuando ya no deba incluirse. Usa **Guardar copia…** para recuperar un solo archivo.
+
+Los respaldos habituales incluyen estos expedientes y sus documentos. Los ZIP contienen todos los documentos adjuntos del cliente, incluidos los INE si se agregaron, y no tienen contraseña. No se emite ninguna factura desde este apartado.
 
 ## Recibir una parte o todos los equipos
 

@@ -475,7 +475,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
                 parent=self)
 
     def make_clients(self):
-        self.heading(self.tabs.tab('Clientes'), 'Directorio de clientes', 'Consulta sus datos, obras anteriores y reputación de pago, entrega y cuidado.')
+        self.heading(self.tabs.tab('Clientes'), 'Directorio de clientes', 'Consulta datos, obras y reputación. Selecciona un cliente para abrir su expediente de facturación.')
         super().make_clients()
         ctk.CTkButton(self.tabs.tab('Clientes'),text='Calificar cliente seleccionado',height=42,fg_color=NAVY,
             command=lambda:self.safe(lambda:self.rating_dialog(self.selected(self.clients)))).pack(anchor='w',pady=10)

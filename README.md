@@ -34,6 +34,18 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 El resultado es `dist\AndamiosAlonso.exe`. Se puede copiar a otro equipo Windows compatible sin instalar Python. El script incluye los recursos de CustomTkinter y el esquema SQL. La compilación debe realizarse en Windows para obtener un ejecutable de Windows, según la [documentación de PyInstaller](https://pyinstaller.org/en/stable/operating-mode.html).
 
+## Instalar en Windows
+
+Después de generar el ejecutable, ejecuta desde esta carpeta:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Se instala para el usuario actual en `%LOCALAPPDATA%\Programs\AndamiosAlonso`, con accesos directos en el escritorio y el menú Inicio. Aparece como **Andamios Alonso** en las aplicaciones instaladas de Windows. El ejecutable incluye Python y sus dependencias; no necesita la carpeta del proyecto para funcionar.
+
+Para actualizar, cierra la versión instalada, vuelve a compilar y ejecuta el mismo instalador. La base de datos y sus documentos continúan en `%LOCALAPPDATA%\AndamiosAlonso`; instalar, actualizar o desinstalar el programa conserva esos datos y sus respaldos.
+
 ## Primer uso
 
 En **Inicio**, las tarjetas **Tipos de equipos** y **Unidades disponibles** abren Inventario; **Rentas activas** abre su listado y **Rentas vencidas** abre las alertas. El botón inferior **Consultar alertas** permanece disponible. Haz doble clic en una fila de **Próximas devoluciones y rentas vencidas** para abrir Rentas activas con esa renta seleccionada; también puedes seleccionar la fila y pulsar Enter.
@@ -48,6 +60,17 @@ En **Inicio**, las tarjetas **Tipos de equipos** y **Unidades disponibles** abre
 8. En **Clientes**, pulsa **Calificar cliente seleccionado**, o usa **Calificar al cliente** después de seleccionarlo en la nueva renta. Al registrar una devolución también se abre la evaluación; puedes cerrarla y calificar después. La secretaria elige pago, devolución y cuidado, de 1 (malo) a 5 (excelente), y pulsa **Guardar calificación**. Los clientes nuevos aparecen **Sin calificar** hasta que se evalúen. El conteo de devoluciones fuera de fecha se calcula con las fechas guardadas y no asigna ni cambia puntuaciones.
 
 Al actualizar una base anterior se conservan sus datos. Como antes se asignaba 3/5 automáticamente sin distinguirlo de una evaluación manual de 3/5, los clientes con los tres valores en 3 aparecen **Sin calificar** hasta confirmar una evaluación. Si alguna puntuación anterior es diferente de 3 se conserva como calificación registrada. Los valores originales permanecen en la base de datos.
+
+## Expediente de facturación por cliente
+
+En **Clientes**, selecciona una persona y pulsa **Expediente para facturación** (también puedes hacer doble clic en su fila o pulsar Enter). El expediente permanece asociado al cliente para sus próximas rentas.
+
+- En **Documentos**, elige el tipo: constancia de situación fiscal, comprobante de domicilio, INE de frente, reverso o ambos lados, u otros documentos. Pulsa **Agregar archivos…** y selecciona uno o varios PDF o imágenes JPG/JPEG, PNG, WEBP, HEIC/HEIF, TIFF o BMP, de hasta **20 MB por archivo**. Se guardan inmediatamente como una copia independiente; puedes mover o borrar el original. Un archivo idéntico del mismo tipo y cliente no se duplica. Si algún archivo de una selección es inválido, no se guarda ninguno de esa selección.
+- En **Datos para factura**, captura opcionalmente nombre o razón social, RFC, código postal fiscal, régimen, uso de CFDI, correo, domicilio fiscal y notas para la contadora. Puedes guardar un expediente parcial. No se extraen datos automáticamente de las fotos ni se comprueba su validez fiscal.
+- **Exportar expediente ZIP** guarda los datos capturados y genera un ZIP con todos los documentos de ese cliente, organizados por tipo, y `Datos_para_facturacion.txt`. Elige dónde guardarlo y envíalo a la contadora por el medio habitual. No incluye reputación, observaciones internas, rentas ni expedientes de otros clientes. No genera ni envía facturas.
+- **Guardar copia…** recupera el documento seleccionado. **Quitar documento** pide confirmación y elimina únicamente la copia del expediente actual; los originales, ZIP ya exportados y respaldos anteriores se conservan. Para actualizar un comprobante, agrega la nueva versión y quita la anterior si ya no debe enviarse.
+
+Los datos fiscales y los archivos se almacenan dentro de la misma base SQLite local y están incluidos en los respaldos automáticos y manuales. Al restaurar una copia se recupera el expediente tal como estaba en ella. El tamaño de la base y sus respaldos crece con los adjuntos. La base y los ZIP no están cifrados; contienen los documentos personales que se hayan adjuntado.
 
 ## Devoluciones parciales y estado
 
@@ -175,6 +198,8 @@ El esquema completo está en [app/schema.sql](app/schema.sql). Relaciones:
 | `rental_returns` | Renta y línea, cantidad recibida, Bueno/Malo, notas, fecha y precio del periodo al recibirse. |
 | `reservations` | Cliente, obra, fechas, importe, estado del apartado y renta generada al entregar. |
 | `reservation_lines` | Equipo, cantidad y tarifa histórica del apartado. |
+| `client_billing` | Datos opcionales para facturación por cliente. |
+| `client_documents` | Copias de documentos, tipo, nombre original, contenido, tamaño, huella SHA-256 y fecha. |
 
 Las claves foráneas están habilitadas. La creación, devolución y ampliación de rentas usan transacciones `BEGIN IMMEDIATE`: todas las operaciones se confirman juntas o se revierten. El stock total no puede reducirse por debajo de las unidades actualmente rentadas. Al abrir una base existente se agrega la tabla de ampliaciones automáticamente, sin borrar los datos.
 
@@ -186,6 +211,8 @@ app/database.py         Conexión, inicialización, artículos base y respaldo
 app/schema.sql          Tablas y restricciones SQLite
 app/service.py          Validaciones, dinero, rentas, devoluciones y notas
 app/ui.py               Componentes compartidos, edición y exportación de notas
+app/client_files.py     Expedientes por cliente, adjuntos locales y exportación ZIP
+app/client_files_ui.py  Ventana de documentos y datos para factura
 app/desktop.py          Diseño con menú lateral, nueva renta integrada y alertas
 app/pricing.py          Tarifas diarias, semanales y mensuales
 app/analytics.py        Métricas y distribución diaria de ingreso esperado
@@ -205,6 +232,12 @@ Comprobación de inicio de la interfaz con una base de prueba:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --db .\data\prueba.sqlite3 --smoke-test
+```
+
+Prueba de la ventana de expedientes con datos ficticios y base temporal:
+
+```powershell
+.\.venv\Scripts\python.exe tests\gui_client_files_check.py
 ```
 
 La nota es un comprobante operativo de renta. Esta versión no incluye facturación fiscal, fotos, identificación individual de cada máquina, reembolsos, recargos automáticos ni impresión directa. Las calificaciones se actualizan manualmente en Clientes. No se requiere ningún servicio remoto para operar.

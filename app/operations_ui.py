@@ -149,7 +149,7 @@ class OperationsUI:
             messagebox.showinfo('Respaldo guardado',str(path),parent=self)
         ctk.CTkButton(bar,text='Crear respaldo ahora',height=44,command=lambda:self.safe(now)).pack(side='left',padx=5)
         ctk.CTkButton(bar,text='Guardar copia en otra ubicación',height=44,command=self.backup).pack(side='left',padx=5)
-        ctk.CTkLabel(page,text='Las copias automáticas están en la misma computadora. Guarda también copias en otra unidad.\nPara restaurar: cierra el programa, conserva una copia de la base actual y reemplázala por el respaldo.\nEl respaldo contiene clientes, inventario, rentas, pagos, devoluciones y reservaciones.',wraplength=850,text_color='#748195',justify='left').pack(anchor='w',pady=10)
+        ctk.CTkLabel(page,text='Las copias automáticas están en la misma computadora. Guarda también copias en otra unidad.\nPara restaurar: cierra el programa, conserva una copia de la base actual y reemplázala por el respaldo.\nEl respaldo contiene clientes, expedientes de facturación con sus documentos, inventario, rentas, pagos, devoluciones y reservaciones.',wraplength=850,text_color='#748195',justify='left').pack(anchor='w',pady=10)
 
     def refresh_backups(self):
         if not hasattr(self,'backup_table'):
