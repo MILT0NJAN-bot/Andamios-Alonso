@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 
 from .client_files import BILLING_FIELDS, DOCUMENT_CATEGORIES, DOCUMENT_EXTENSIONS, safe_filename
+from .resources import ICON_PATH
 
 
 class ClientBillingDialog(ctk.CTkToplevel):
@@ -23,8 +24,10 @@ class ClientBillingDialog(ctk.CTkToplevel):
         self.geometry(f'{width}x{height}+{max(0, (self.winfo_screenwidth() - width) // 2)}'
                       f'+{max(0, (self.winfo_screenheight() - height) // 2 - 20)}')
         self.minsize(760, 600)
-        self.transient(parent)
-        self.grab_set()
+        # El expediente permite trabajar con el Explorador y la ventana principal.
+        # Un grab modal retenido por una ventana minimizada bloquea la aplicación.
+        if ICON_PATH.exists():
+            self.after(300, lambda: self.iconbitmap(str(ICON_PATH)) if self.winfo_exists() else None)
         self.protocol('WM_DELETE_WINDOW', self.close)
         ctk.CTkLabel(self, text=client['name'], font=ctk.CTkFont(size=23, weight='bold'),
                      wraplength=700, anchor='w').pack(fill='x', padx=22, pady=(18, 0))
@@ -65,6 +68,7 @@ class ClientBillingDialog(ctk.CTkToplevel):
         ctk.CTkOptionMenu(bar, values=list(DOCUMENT_CATEGORIES), variable=self.category,
                           width=300).pack(side='left')
         ctk.CTkButton(bar, text='Agregar archivos…', command=lambda: self.run(self.add_documents)).pack(side='left', padx=10)
+        ctk.CTkButton(page,text='Comprobantes de transferencia / adjuntar a un pago',command=lambda:self.run(lambda:self.master.transfer_receipts_dialog(self.client_id))).pack(fill='x',padx=8,pady=4)
 
         actions = ctk.CTkFrame(page, fg_color='transparent')
         actions.pack(side='bottom', fill='x', padx=8, pady=8)
@@ -126,6 +130,7 @@ class ClientBillingDialog(ctk.CTkToplevel):
         for name, value in self.fields.items():
             value.set(self.saved_details[name])
         self.status.configure(text='Datos para factura guardados en este cliente.')
+        self.master.refresh_clients()
 
     def refresh_documents(self):
         rows = self.service.client_documents(self.client_id)
@@ -190,18 +195,19 @@ class ClientBillingDialog(ctk.CTkToplevel):
         if self.details() != self.saved_details:
             self.save_details()
         count = self.service.export_client_billing(self.client_id, path)
-        self.status.configure(text=f'ZIP guardado con {count} documento(s): {path}')
-        messagebox.showinfo('Expediente exportado', f'Se guardaron {count} documento(s) y la ficha de datos.\n\n{path}', parent=self)
+        self.status.configure(text=f'ZIP guardado correctamente con {count} documento(s) y la ficha de datos:\n{path}',
+                              text_color='#18865B')
 
     def close(self):
         if self.details() != self.saved_details:
             answer = messagebox.askyesnocancel('Datos sin guardar', '¿Guardar los cambios en los datos para factura antes de cerrar?', parent=self)
             if answer is None:
-                return
+                return False
             if answer:
                 try:
                     self.save_details()
                 except (ValueError, OSError, sqlite3.Error) as exc:
                     messagebox.showerror('No se pudo guardar', str(exc), parent=self)
-                    return
+                    return False
         self.destroy()
+        return True

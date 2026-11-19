@@ -62,6 +62,21 @@ def run(preview=False):
             with ZipFile(output) as archive:
                 assert len(archive.namelist()) == 2
                 assert 'AAA010101AAA' in archive.read('Datos_para_facturacion.txt').decode('utf-8-sig')
+            assert app.grab_current() is None
+            assert not window.transient()
+            for _ in range(3):
+                window.iconify();app.iconify();settle()
+                app.deiconify();window.deiconify();settle()
+                assert app.state()=='normal'
+                assert window.state()=='normal'
+                assert app.grab_current() is None
+                app.navigate('Inicio');settle()
+                assert app.tabs.tab('Inicio').winfo_ismapped()
+            window.iconify();settle()
+            assert app.client_billing_dialog(client) is window
+            settle()
+            assert window.state()=='normal'
+            assert len([w for w in app.winfo_children() if isinstance(w,ClientBillingDialog)])==1
             assert window.fields['rfc'].get() == 'AAA010101AAA'
             document = window.documents.get_children()[0]
             window.documents.selection_set(document)
@@ -88,6 +103,13 @@ def run(preview=False):
             with patch('app.client_files_ui.messagebox.askyesnocancel', return_value=True):
                 window.close()
             assert app.service.billing_details(client)['email'] == 'prueba@example.com'
+            app.clients.selection_set(str(client));settle()
+            assert app.clients.item(str(client),'values')[3]=='prueba@example.com'
+            app.copy_email_button.invoke()
+            assert app.clipboard_get()=='prueba@example.com'
+            app.client_filter.set('PRUEBA@EXAMPLE.COM');settle()
+            assert app.clients.get_children()==(str(client),)
+            app.client_filter.set('');settle()
             window = app.client_billing_dialog(client)
             settle()
             assert window.fields['email'].get() == 'prueba@example.com'
@@ -95,6 +117,15 @@ def run(preview=False):
             with patch('app.client_files_ui.messagebox.askyesnocancel', return_value=False):
                 window.close()
             assert app.service.billing_details(client)['email'] == 'prueba@example.com'
+            window = app.client_billing_dialog(client)
+            window.fields['email'].set('pendiente@example.com')
+            with patch('app.client_files_ui.messagebox.askyesnocancel', return_value=None):
+                app.close()
+            assert not app._closing
+            assert window.winfo_exists()
+            assert app.service.billing_details(client)['email']=='prueba@example.com'
+            with patch('app.client_files_ui.messagebox.askyesnocancel', return_value=False):
+                window.close()
             assert not errors, errors
             print('GUI expediente: adjuntar, duplicados, guardar, ZIP, copia, quitar y cambios pendientes correctos.', flush=True)
             if preview:

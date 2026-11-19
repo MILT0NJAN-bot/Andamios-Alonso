@@ -32,7 +32,7 @@ class ExtrasTests(unittest.TestCase):
     def test_reservation_preserves_extras(self):
         today=date.today()
         key=self.service.create_reservation(self.client,'Obra',today.isoformat(),
-            (today+timedelta(days=2)).isoformat(),{self.item:1},freight='150',extra_planks=3)
+            (today+timedelta(days=2)).isoformat(),{self.item:1},freight='150',extra_planks=3,_legacy_without_deposit=True)
         rental=self.service.start_reservation(key)
         row=self.db.rows('SELECT * FROM rentals WHERE id=?',(rental,))[0]
         self.assertEqual(row['total_cents'],55100)

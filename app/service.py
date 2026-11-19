@@ -4,6 +4,9 @@ from .pricing import unit_total, tariff_label, line_charge
 from .operations import Operations
 from .taxes import amounts,percent
 from .client_files import ClientFiles
+from .transfer_receipts import TransferReceipts
+from .address_fields import save_address_parts
+from .reservation_payments import ReservationPayments
 
 
 def cents(value):
@@ -20,10 +23,11 @@ def money(value):
     return f'${value / 100:,.2f}'
 
 
-class Service(Operations, ClientFiles):
-    def __init__(self, db, tax_rates=(0,0)):
+class Service(ReservationPayments,Operations, ClientFiles, TransferReceipts):
+    def __init__(self, db, tax_rates=(0,0), require_cash_open=False):
         self.db = db
         self.tax_rates=(tax_rates[0],0)
+        self.require_cash_open=require_cash_open
 
     def save_item(self, item_id, name, total, price, pricing_mode=None, week=None, month=None,replacement_cost=None):
         name = name.strip()
@@ -61,7 +65,47 @@ class Service(Operations, ClientFiles):
                 if self.period_available(item_id,reservation['departure'],reservation['due'])<0:
                     raise ValueError('Ese stock dejaría reservaciones sin piezas. Revisa primero los apartados.')
 
-    def save_client(self, client_id, name, phone, ratings, notes, address=''):
+    def classify_scaffolds(self,quantities):
+        from .database import SCAFFOLD_SIZES
+        conn=self.db.conn
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            source=conn.execute("SELECT * FROM items WHERE name='Andamios' AND archived=0").fetchone()
+            if not source:raise ValueError('No hay stock de Andamios sin clasificar.')
+            targets={r['id']:r for r in self.db.rows('SELECT * FROM items WHERE archived=0 AND name IN (?,?,?)',SCAFFOLD_SIZES)}
+            if not quantities or any(key not in targets or type(q) is not int or q<0 for key,q in quantities.items()):
+                raise ValueError('Escribe cantidades enteras positivas o cero para cada tamaño.')
+            total=sum(quantities.values())
+            if total<=0 or total>source['available']:
+                raise ValueError(f"Puedes clasificar entre 1 y {source['available']} andamios disponibles. Las piezas en renta o revisión se conservan en su registro actual.")
+            conn.execute('UPDATE items SET total=total-?,available=available-? WHERE id=?',(total,total,source['id']))
+            for reservation in self.db.rows("SELECT r.departure,r.due FROM reservations r JOIN reservation_lines l ON l.reservation_id=r.id WHERE r.status='Confirmada' AND l.item_id=?",(source['id'],)):
+                if self.period_available(source['id'],reservation['departure'],reservation['due'])<0:
+                    raise ValueError('Estas piezas están comprometidas en reservaciones de Andamios. Revisa esos apartados antes de clasificarlas.')
+            for key,quantity in quantities.items():
+                if not quantity:continue
+                conn.execute('UPDATE items SET total=total+?,available=available+? WHERE id=?',(quantity,quantity,key))
+                conn.execute('INSERT INTO stock_classifications(source_id,target_id,quantity) VALUES (?,?,?)',(source['id'],key,quantity))
+            conn.commit()
+        except Exception:
+            conn.rollback();raise
+
+    def delete_item(self,item_id):
+        conn=self.db.conn
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            row=conn.execute('SELECT * FROM items WHERE id=? AND archived=0',(item_id,)).fetchone()
+            if not row:raise ValueError('El artículo ya no está en el inventario activo.')
+            if row['maintenance'] or conn.execute('SELECT 1 FROM rental_lines WHERE item_id=? AND quantity>returned_qty',(item_id,)).fetchone():
+                raise ValueError('Primero recibe las piezas rentadas y libera las piezas en revisión de este artículo.')
+            if any(self.reservation_payment_summary(r['id'])['confirmed'] for r in self.db.rows("SELECT r.id FROM reservation_lines l JOIN reservations r ON r.id=l.reservation_id WHERE l.item_id=? AND r.status='Confirmada'",(item_id,))):
+                raise ValueError('El artículo tiene reservaciones pendientes. Cancela o entrega esos apartados antes de eliminarlo.')
+            conn.execute('UPDATE items SET archived=1 WHERE id=?',(item_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback();raise
+
+    def save_client(self, client_id, name, phone, ratings, notes, address='',address_data=None):
         name, phone = name.strip(), phone.strip()
         if not name or sum(c.isdigit() for c in phone) < 7:
             raise ValueError('Escribe el nombre y un teléfono de al menos 7 dígitos.')
@@ -76,6 +120,7 @@ class Service(Operations, ClientFiles):
                 client_id = self.db.conn.execute('INSERT INTO clients(name,phone,payment_rating,return_rating,care_rating,notes,ratings_confirmed) VALUES (?,?,?,?,?,?,?)', args).lastrowid
             if address.strip():
                 self.db.conn.execute('INSERT OR IGNORE INTO addresses(client_id,address) VALUES (?,?)', (client_id,address.strip()))
+                save_address_parts(self.db,client_id,address,address_data)
         return client_id
 
     def rate_client(self, client_id, ratings):
@@ -106,12 +151,14 @@ class Service(Operations, ClientFiles):
         return client
 
     def create_rental(self, client_id, address, departure, due, quantities, client_data=None, initial_payment=None,
-                      delivery_states=None,_in_transaction=False,_reservation_id=None,_tariffs=None,_tax_rates=None,invoice_required=None,freight='0',extra_planks=0):
+                      delivery_states=None,_in_transaction=False,_reservation_id=None,_tariffs=None,_tax_rates=None,invoice_required=None,freight='0',extra_planks=0,address_data=None,clear_draft=False):
         freight_value=cents(freight or '0')
         if str(extra_planks)!=str(int(extra_planks)) or int(extra_planks)<0:
             raise ValueError('Captura una cantidad entera de tablones, cero si no aplica.')
         extra_planks=int(extra_planks);plank_value=extra_planks*5000
         start, end = date.fromisoformat(departure), date.fromisoformat(due)
+        if start>date.today() and self.require_cash_open:
+            raise ValueError('Para una salida futura utiliza Reservaciones → Nueva reservación. Nueva renta es para entregas de hoy.')
         days = (end-start).days
         if days < 1:
             raise ValueError('La devolución debe ser posterior a la salida (mínimo un día).')
@@ -121,14 +168,23 @@ class Service(Operations, ClientFiles):
         try:
             if not _in_transaction:
                 conn.execute('BEGIN IMMEDIATE')
+            if self.require_cash_open:
+                from .cash import Cash
+                Cash(self.db).require_open(date.today().isoformat())
             client=self._resolve_client(client_id,client_data)
             client_id=client['id']
+            if client_data is not None and 'email' in client_data:
+                email=str(client_data['email']).strip()
+                if len(email)>254 or (email and ('@' not in email or any(c.isspace() for c in email))):
+                    raise ValueError('Revisa el correo del cliente o deja el campo vacío.')
+                conn.execute('INSERT INTO client_billing(client_id,email) VALUES (?,?) '
+                    'ON CONFLICT(client_id) DO UPDATE SET email=excluded.email',(client_id,email))
             lines = []
             for item_id, quantity in quantities.items():
                 if not isinstance(quantity, int) or quantity < 1:
                     raise ValueError('Las cantidades deben ser enteros positivos.')
                 item = conn.execute('SELECT * FROM items WHERE id=?', (item_id,)).fetchone()
-                if not item or quantity > item['available']:
+                if not item or item['archived'] or quantity > item['available']:
                     raise ValueError('Stock insuficiente. Actualiza la selección de equipos.')
                 if quantity>self.period_available(item_id,start,end,exclude_reservation=_reservation_id):
                     raise ValueError('Las piezas están comprometidas en reservaciones para esas fechas.')
@@ -141,6 +197,7 @@ class Service(Operations, ClientFiles):
                 lines.append((item, quantity))
                 unit_total(item,days)
             conn.execute('INSERT OR IGNORE INTO addresses(client_id,address) VALUES (?,?)', (client_id,address.strip()))
+            save_address_parts(self.db,client_id,address,address_data)
             address_id = conn.execute('SELECT id FROM addresses WHERE client_id=? AND address=?', (client_id,address.strip())).fetchone()[0]
             subtotal = sum(unit_total(item,days)*quantity for item, quantity in lines)+freight_value+plank_value
             vat=(_tax_rates if _tax_rates is not None else self.tax_rates)[0] if invoice_required is None else (1600 if invoice_required else 0)
@@ -164,6 +221,7 @@ class Service(Operations, ClientFiles):
                     (condition,state.get('notes','').strip() if condition=='Malo' else '',rental_id,item['id']))
             if initial_payment is not None:
                 self._insert_payment(rental_id,**initial_payment)
+            if clear_draft:conn.execute("DELETE FROM app_drafts WHERE key='rental'")
             if not _in_transaction:
                 conn.commit()
             return rental_id
@@ -176,36 +234,47 @@ class Service(Operations, ClientFiles):
         rows=self.db.rows('SELECT total_cents FROM rentals WHERE id=?',(rental_id,))
         if not rows:
             raise ValueError('La renta no existe.')
-        paid=self.db.rows('SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE rental_id=? AND cancelled_at IS NULL',(rental_id,))[0][0]
+        paid=self.db.rows('SELECT COALESCE(SUM(amount_cents),0) FROM financial_payments WHERE rental_id=? AND cancelled_at IS NULL',(rental_id,))[0][0]
         total=rows[0]['total_cents']
         balance=total-paid
-        status='Saldo a favor' if balance<0 else ('Liquidada' if balance==0 else ('Pago parcial' if paid else 'Sin pagos'))
-        return {'total_cents':total,'paid_cents':paid,'pending_cents':max(0,balance),'credit_cents':max(0,-balance),'status':status}
+        status='Pagado' if balance<=0 else 'Pendiente'
+        return {'total_cents':total,'paid_cents':paid,'pending_cents':max(0,balance),'status':status}
 
-    def _insert_payment(self,rental_id,amount,method='Efectivo',paid_on=None,reference='',kind='Abono'):
+    def _insert_payment(self,rental_id,amount,method='Efectivo',paid_on=None,reference='',kind=None,receipt_path=None):
         amount=cents(amount)
         if amount<=0:
             raise ValueError('El pago debe ser mayor a cero.')
-        if method not in ('Efectivo','Transferencia','Tarjeta') or kind not in ('Anticipo','Abono','Liquidación'):
+        if method not in ('Efectivo','Transferencia','Tarjeta') or (kind is not None and kind not in ('Anticipo','Abono','Liquidación')):
             raise ValueError('Selecciona un tipo y método de pago válidos.')
+        invoice=self.db.rows('SELECT vat_bp FROM rentals WHERE id=?',(rental_id,))
+        if invoice and invoice[0]['vat_bp'] and method!='Transferencia':
+            raise ValueError('Las rentas con factura solo aceptan pagos por transferencia.')
+        if receipt_path and method!='Transferencia':
+            raise ValueError('Los comprobantes de transferencia solo se adjuntan a transferencias.')
         paid_on=paid_on or date.today().isoformat()
         payment_date=date.fromisoformat(paid_on)
+        if self.require_cash_open:
+            from .cash import Cash
+            Cash(self.db).require_open(payment_date.isoformat())
         if payment_date>date.today():
             raise ValueError('Un pago recibido no puede tener una fecha futura.')
         summary=self.payment_summary(rental_id)
+        if kind is None:kind='Anticipo' if not summary['paid_cents'] else 'Abono'
         if amount>summary['pending_cents']:
             raise ValueError(f"El pago supera el saldo pendiente de {money(summary['pending_cents'])}.")
         if kind=='Liquidación' and amount!=summary['pending_cents']:
             raise ValueError('Para liquidar, el importe debe ser igual al saldo pendiente.')
         if amount==summary['pending_cents']:
             kind='Liquidación'
-        return self.db.conn.execute('INSERT INTO payments(rental_id,amount_cents,kind,method,paid_on,reference) VALUES (?,?,?,?,?,?)',
+        key=self.db.conn.execute('INSERT INTO payments(rental_id,amount_cents,kind,method,paid_on,reference) VALUES (?,?,?,?,?,?)',
             (rental_id,amount,kind,method,payment_date.isoformat(),reference.strip())).lastrowid
+        if receipt_path:self._attach_transfer_receipt(key,receipt_path)
+        return key
 
-    def record_payment(self,rental_id,amount,method='Efectivo',paid_on=None,reference='',kind='Abono'):
+    def record_payment(self,rental_id,amount,method='Efectivo',paid_on=None,reference='',kind=None,receipt_path=None):
         try:
             self.db.conn.execute('BEGIN IMMEDIATE')
-            key=self._insert_payment(rental_id,amount,method,paid_on,reference,kind)
+            key=self._insert_payment(rental_id,amount,method,paid_on,reference,kind,receipt_path)
             self.db.conn.commit()
             return key
         except Exception:
@@ -213,6 +282,7 @@ class Service(Operations, ClientFiles):
             raise
 
     def cancel_payment(self,payment_id,reason):
+        if payment_id<0:return self.cancel_reservation_payment(-payment_id,reason)
         if not reason.strip():
             raise ValueError('Escribe el motivo de la anulación.')
         with self.db.conn:
@@ -279,6 +349,8 @@ class Service(Operations, ClientFiles):
             if not rows:
                 raise ValueError('La renta no existe.')
             rental=rows[0]
+            if required and self.db.rows("SELECT 1 FROM financial_payments WHERE rental_id=? AND cancelled_at IS NULL AND method<>'Transferencia'",(rental_id,)):
+                raise ValueError('Esta renta tiene pagos en efectivo o tarjeta. Corrige esos pagos antes de solicitar factura; no se cambiará su método automáticamente.')
             breakdown=amounts(rental['subtotal_cents'],1600 if required else 0,0)
             self.db.conn.execute('UPDATE rentals SET vat_bp=?,isr_bp=?,vat_cents=?,isr_cents=?,total_cents=? WHERE id=?',
                 (breakdown['vat_bp'],breakdown['isr_bp'],breakdown['vat_cents'],breakdown['isr_cents'],breakdown['total_cents'],rental_id))
@@ -314,6 +386,6 @@ class Service(Operations, ClientFiles):
         text.extend([f"Flete: {money(rental['freight_cents'])}",f"Tablones extra: {rental['extra_planks']} × $50 = {money(rental['plank_cents'])}"])
         text.extend(['',f"SUBTOTAL: {money(rental['subtotal_cents'])}",f"IVA {percent(rental['vat_bp'])}: {money(rental['vat_cents'])}",
             f"Factura: {'Solicitada' if rental['vat_bp'] else 'No solicitada'}", f"TOTAL: {money(rental['total_cents'])} MXN", f"PAGADO: {money(summary['paid_cents'])} MXN",
-            f"SALDO PENDIENTE: {money(summary['pending_cents'])} MXN",f"SALDO A FAVOR: {money(summary['credit_cents'])} MXN",f"Pago: {summary['status']}",
+            f"SALDO PENDIENTE: {money(summary['pending_cents'])} MXN",f"Pago: {summary['status']}",
             f"Estado: {'Devuelta el '+rental['returned_at'] if rental['returned_at'] else 'Activa'}", '', 'Firma cliente: ____________________', 'Firma entrega: ____________________'])
         return '\n'.join(text)

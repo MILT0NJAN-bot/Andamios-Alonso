@@ -15,6 +15,7 @@ def run():
     ctk.set_appearance_mode('light')
     with tempfile.TemporaryDirectory() as folder:
         app = Application(Database(Path(folder)/'gui.sqlite3'))
+        app.cash.open_day(date.today().isoformat(),'0','Prueba GUI')
         errors = []
         app.report_callback_exception = lambda kind, value, tb: errors.append(value)
         def settle():
@@ -116,11 +117,9 @@ def run():
             assert app.service.payment_summary(key)['paid_cents']==5000
             assert app.service.payment_summary(key)['pending_cents']==15000
             payment_window=next(w for w in app.winfo_children() if isinstance(w,ctk.CTkToplevel))
-            liquidate=next(w for w in descendants(payment_window) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Completar importe para liquidar')
-            liquidate.invoke()
-            register=next(w for w in descendants(payment_window) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Registrar pago')
+            liquidate=next(w for w in descendants(payment_window) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Cobrar todo lo pendiente')
             with patch('app.payments_ui.messagebox.askyesno',return_value=True):
-                register.invoke()
+                liquidate.invoke()
             settle()
             assert app.service.payment_summary(key)['pending_cents']==0
             for widget in app.winfo_children():
@@ -133,7 +132,7 @@ def run():
                 settle()
                 app.stats[index]._label.event_generate('<Button-1>',x=5,y=5)
                 settle()
-                assert app.tabs.tab(target).winfo_ismapped()
+                assert app.tabs.tab(target).winfo_ismapped(), (index, app.stats[index].winfo_geometry(),app.stats[index]._label.winfo_geometry(),app.grab_current(),app.stats[index]._label.bind('<Button-1>'))
             app.navigate('Inicio')
             app.update()
             app.active_filter.set('Filtro que oculta la renta')
@@ -185,7 +184,11 @@ def run():
             before=app.db.rows('SELECT available FROM items WHERE id=?',(item,))[0][0]
             with patch('app.operations_ui.messagebox.askyesno',return_value=True):
                 app.reserve_current()
-            assert len(app.db.rows('SELECT * FROM reservations'))==1
+            settle()
+            reservation_window=app.grab_current()
+            assert 'Nueva reservación' in reservation_window.title()
+            assert not app.db.rows('SELECT * FROM reservations')
+            reservation_window.destroy()
             assert app.db.rows('SELECT available FROM items WHERE id=?',(item,))[0][0]==before
             assert app.db.automatic_backup(force=True).exists()
             for page in app.tabs.frames:

@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
-& .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name AndamiosAlonso --icon 'assets/logo_alonso.png' --collect-all customtkinter --add-data 'app/schema.sql;app' --add-data 'assets;assets' main.py
+& .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name AndamiosAlonso --icon 'assets/logo_alonso.ico' --collect-all customtkinter --add-data 'app/schema.sql;app' --add-data 'assets;assets' main.py
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar el ejecutable.' }
 Write-Host 'Ejecutable generado: dist\AndamiosAlonso.exe'
 if (Test-Path -LiteralPath '.\dist\AndamiosAlonsoActualizado.exe') {

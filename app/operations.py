@@ -60,15 +60,19 @@ class Operations:
             if not cursor.rowcount:
                 raise ValueError('La cantidad supera las piezas en revisión.')
 
-    def period_available(self,item_id,start,end,exclude_reservation=None,exclude_rental=None):
+    def period_available(self,item_id,start,end,exclude_reservation=None,exclude_rental=None,for_reservation=False):
         start=date.fromisoformat(start) if isinstance(start,str) else start
         end=date.fromisoformat(end) if isinstance(end,str) else end
         if end<=start:
             raise ValueError('La devolución debe ser posterior a la salida.')
+        # Las fechas de devolución ocupan ese día completo. Un apartado exige
+        # además un día previo completo de recogida/revisión.
+        if for_reservation:start-=timedelta(days=1)
+        end+=timedelta(days=1)
         item=self.db.rows('SELECT * FROM items WHERE id=?',(item_id,))
         if not item:
             raise ValueError('El equipo no existe.')
-        capacity=item[0]['total']-item[0]['maintenance']
+        capacity=0 if item[0]['archived'] else item[0]['total']-item[0]['maintenance']
         events=[]
         def occupy(begin,finish,quantity):
             begin=max(start,begin);finish=min(end,finish)
@@ -79,24 +83,25 @@ class Operations:
                 continue
             due=date.fromisoformat(row['due'])
             # Una renta vencida sin devolución no tiene una fecha fiable de liberación.
-            occupy(min(date.fromisoformat(row['departure']),date.today()),end if due<date.today() else due,row['pending'])
+            occupy(min(date.fromisoformat(row['departure']),date.today()),end if due<date.today() else due+timedelta(days=1),row['pending'])
         for row in self.db.rows("SELECT r.*,l.quantity FROM reservations r JOIN reservation_lines l ON l.reservation_id=r.id WHERE r.status='Confirmada' AND l.item_id=?",(item_id,)):
             if row['id']!=exclude_reservation:
-                occupy(date.fromisoformat(row['departure']),date.fromisoformat(row['due']),row['quantity'])
+                if not self.reservation_payment_summary(row['id'])['confirmed']:continue
+                occupy(date.fromisoformat(row['departure'])-timedelta(days=1),date.fromisoformat(row['due'])+timedelta(days=1),row['quantity'])
         current=peak=0
         for _,change in sorted(events,key=lambda x:(x[0],x[1])):
             current+=change;peak=max(peak,current)
         return capacity-peak
 
-    def create_reservation(self,client_id,address,departure,due,quantities,client_data=None,invoice_required=None,freight='0',extra_planks=0):
+    def create_reservation(self,client_id,address,departure,due,quantities,client_data=None,invoice_required=None,freight='0',extra_planks=0,address_data=None,clear_draft=False,initial_payment=None,_legacy_without_deposit=False):
         from .service import cents
         freight_value=cents(freight or '0')
         if str(extra_planks)!=str(int(extra_planks)) or int(extra_planks)<0:
             raise ValueError('Captura una cantidad entera de tablones, cero si no aplica.')
         extra_planks=int(extra_planks);plank_value=extra_planks*5000
         start,end=date.fromisoformat(departure),date.fromisoformat(due)
-        if start<date.today() or end<=start:
-            raise ValueError('Selecciona una salida desde hoy y una devolución posterior.')
+        if start<date.today() or (start==date.today() and not _legacy_without_deposit) or end<=start:
+            raise ValueError('La reservación debe tener una salida futura y devolución posterior. Para entregar hoy registra una renta.')
         if not quantities or not address.strip():
             raise ValueError('Completa dirección y equipos para reservar.')
         conn=self.db.conn
@@ -105,7 +110,7 @@ class Operations:
             client=self._resolve_client(client_id,client_data)
             lines=[]
             for key,quantity in quantities.items():
-                if type(quantity) is not int or quantity<1 or quantity>self.period_available(key,start,end):
+                if type(quantity) is not int or quantity<1 or quantity>self.period_available(key,start,end,for_reservation=True):
                     raise ValueError('No hay suficientes piezas disponibles en esas fechas. Revisa las reservaciones.')
                 row=self.db.rows('SELECT * FROM items WHERE id=?',(key,))[0]
                 unit_total(row,(end-start).days)
@@ -115,6 +120,7 @@ class Operations:
             total=breakdown['total_cents']
             key=conn.execute('INSERT INTO reservations(client_id,client_name,client_phone,work_address,departure,due,days,total_cents) VALUES (?,?,?,?,?,?,?,?)',
                 (client['id'],client['name'],client['phone'],address.strip(),departure,due,(end-start).days,total)).lastrowid
+            conn.execute('UPDATE reservations SET deposit_required=? WHERE id=?',(0 if _legacy_without_deposit else 1,key))
             conn.execute('UPDATE reservations SET subtotal_cents=?,vat_bp=?,isr_bp=?,vat_cents=?,isr_cents=? WHERE id=?',
                 (subtotal,breakdown['vat_bp'],breakdown['isr_bp'],breakdown['vat_cents'],breakdown['isr_cents'],key))
             conn.execute('UPDATE reservations SET freight_cents=?,extra_planks=?,plank_cents=? WHERE id=?',(freight_value,extra_planks,plank_value,key))
@@ -123,6 +129,10 @@ class Operations:
                     (key,row['id'],row['name'],quantity,row['price_cents'],row['pricing_mode'],row['week_cents'],row['month_cents']))
                 conn.execute('UPDATE reservation_lines SET replacement_cents=? WHERE reservation_id=? AND item_id=?',(row['replacement_cents'],key,row['id']))
             conn.execute('INSERT OR IGNORE INTO addresses(client_id,address) VALUES (?,?)',(client['id'],address.strip()))
+            from .address_fields import save_address_parts
+            save_address_parts(self.db,client['id'],address,address_data)
+            if initial_payment:self._record_reservation_payment(key,**initial_payment)
+            if clear_draft:conn.execute("DELETE FROM app_drafts WHERE key='rental'")
             conn.commit()
             return key
         except Exception:
@@ -143,6 +153,8 @@ class Operations:
             if not rows:
                 raise ValueError('La reservación ya fue entregada, cancelada o no existe.')
             reservation=rows[0]
+            if not self.reservation_payment_summary(key)['confirmed']:
+                raise ValueError('Falta recibir el anticipo mínimo del 50% para confirmar y entregar esta reservación.')
             if reservation['departure']>date.today().isoformat():
                 raise ValueError('La entrega se puede registrar a partir de la fecha reservada.')
             start=date.today();end=start+timedelta(days=reservation['days'])

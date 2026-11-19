@@ -35,6 +35,8 @@ class Application(ctk.CTk):
         self.protocol('WM_DELETE_WINDOW', self.close)
 
     def close(self):
+        if not self.close_client_billing_windows():
+            return
         self.db.conn.close()
         self.destroy()
 
@@ -75,7 +77,7 @@ class Application(ctk.CTk):
             tree.insert('', 'end', iid=str(key), values=values)
 
     def refresh(self):
-        self.items = {r['id']: r for r in self.db.rows('SELECT * FROM items ORDER BY name')}
+        self.items = {r['id']: r for r in self.db.rows('SELECT * FROM items WHERE archived=0 ORDER BY name')}
         self.item_labels = {f"{r['name']} | Disponibles: {r['available']} | {tariff_label(r)}": key for key,r in self.items.items()}
         labels = list(self.item_labels)
         self.item_menu.configure(values=labels)
@@ -95,10 +97,23 @@ class Application(ctk.CTk):
         buttons.pack(fill='x')
         ctk.CTkButton(buttons,text='Agregar artículo',command=lambda:self.item_dialog()).pack(side='left',padx=5,pady=10)
         ctk.CTkButton(buttons,text='Modificar seleccionado',command=lambda:self.safe(lambda:self.item_dialog(self.selected(self.inventory)))).pack(side='left',padx=5)
+        ctk.CTkButton(buttons,text='Eliminar artículo',fg_color='#B52B27',command=lambda:self.safe(self.delete_selected_item)).pack(side='left',padx=5)
+
+    def delete_selected_item(self):
+        key=self.selected(self.inventory)
+        name=self.items[key]['name']
+        if not messagebox.askyesno('Eliminar artículo',f'¿Quitar «{name}» del inventario y de las nuevas rentas?\nSe conservarán sus notas y movimientos anteriores.',parent=self):return
+        self.service.delete_item(key)
+        self.cart.pop(key,None)
+        if hasattr(self,'cart_conditions'):self.cart_conditions.pop(key,None)
+        self.refresh()
 
     def dialog(self, title):
         win = ctk.CTkToplevel(self)
         win.title(title)
+        from .resources import ICON_PATH
+        if ICON_PATH.exists():
+            win.after(300,lambda:win.iconbitmap(str(ICON_PATH)) if win.winfo_exists() else None)
         win.geometry('550x680')
         win.transient(self)
         win.grab_set()
@@ -127,30 +142,78 @@ class Application(ctk.CTk):
 
     def make_clients(self):
         page = self.tabs.tab('Clientes')
-        self.client_filter = self.entry(page,'Buscar por nombre o teléfono')
+        self.client_filter = self.entry(page,'Buscar por nombre, teléfono o correo')
         self.client_filter.trace_add('write',lambda *_:self.refresh_clients())
-        self.clients = self.table(page,('ID','Nombre','Teléfono','Pago (1–5)','Entrega (1–5)','Cuidado (1–5)','Saldo pendiente'))
+        self.clients = self.table(page,('ID','Nombre','Teléfono','Correo','Pago (1–5)','Entrega (1–5)','Cuidado (1–5)','Saldo pendiente'))
+        self.clients.column('ID',width=45,minwidth=35)
+        self.clients.column('Correo',width=220,minwidth=140)
+        self.clients.column('Nombre',width=185,minwidth=110)
         bar = ctk.CTkFrame(page,fg_color='transparent')
         bar.pack(fill='x')
         ctk.CTkButton(bar,text='Registrar cliente',command=lambda:self.client_dialog()).pack(side='left',padx=5,pady=10)
         ctk.CTkButton(bar,text='Editar / ver direcciones',command=lambda:self.safe(lambda:self.client_dialog(self.selected(self.clients)))).pack(side='left',padx=5)
         ctk.CTkButton(bar,text='Expediente para facturación',fg_color='#18865B',
             command=lambda:self.safe(lambda:self.client_billing_dialog(self.selected(self.clients)))).pack(side='left',padx=5)
+        self.copy_email_button=ctk.CTkButton(bar,text='Copiar correo',state='disabled',command=lambda:self.safe(self.copy_client_email))
+        self.copy_email_button.pack(side='left',padx=5)
+        self.email_status=ctk.CTkLabel(page,text='Haz clic en un correo para copiarlo. Captúralo o edítalo en Expediente para facturación.',text_color='#748195',wraplength=850)
+        self.email_status.pack(fill='x',pady=6)
+        self.clients.bind('<<TreeviewSelect>>',lambda _:self.update_email_selection())
+        self.clients.bind('<ButtonRelease-1>',self.click_client_email)
         self.clients.bind('<Double-1>',lambda event:self.safe(lambda:self.client_billing_dialog(int(self.clients.identify_row(event.y))))
-                          if self.clients.identify_row(event.y) else None)
+                          if self.clients.identify_row(event.y) and self.clients.identify_column(event.x)!='#4' else None)
         self.clients.bind('<Return>',lambda _:self.safe(lambda:self.client_billing_dialog(self.selected(self.clients))))
 
+    def update_email_selection(self):
+        selected=self.clients.selection()
+        email=self.service.billing_details(int(selected[0]))['email'].strip() if selected else ''
+        self.copy_email_button.configure(state='normal' if email else 'disabled')
+
+    def click_client_email(self,event):
+        key=self.clients.identify_row(event.y)
+        if key and self.clients.identify_column(event.x)=='#4':
+            self.safe(lambda:self.copy_client_email(int(key)))
+
+    def copy_client_email(self,key=None):
+        key=key if key is not None else self.selected(self.clients)
+        email=self.service.billing_details(key)['email'].strip()
+        if not email:
+            self.email_status.configure(text='Este cliente no tiene correo. Agrégalo en Expediente para facturación.',text_color='#9D4310')
+            return
+        self.clipboard_clear()
+        self.clipboard_append(email)
+        self.email_status.configure(text=f'Correo copiado: {email}',text_color='#18865B')
+
     def client_billing_dialog(self, key):
+        for window in self.winfo_children():
+            if isinstance(window,ClientBillingDialog) and window.client_id==key:
+                window.refresh_documents()
+                window.deiconify()
+                window.lift()
+                window.focus_set()
+                return window
         return ClientBillingDialog(self, key)
+
+    def close_client_billing_windows(self):
+        for window in list(self.winfo_children()):
+            if isinstance(window,ClientBillingDialog) and window.winfo_exists():
+                window.deiconify()
+                window.lift()
+                if not window.close():
+                    return False
+        return True
 
     def refresh_clients(self):
         if not hasattr(self,'clients'):
             return
         term = self.client_filter.get().casefold().strip()
-        rows = self.db.rows('SELECT * FROM clients ORDER BY name')
-        self.fill(self.clients,[(r['id'],(r['id'],r['name'],r['phone'],*[r[c] if r['ratings_confirmed'] else 'Sin calificar' for c in ('payment_rating','return_rating','care_rating')],
+        selection=self.clients.selection()
+        rows = self.db.rows("SELECT c.*,COALESCE(b.email,'') AS email FROM clients c LEFT JOIN client_billing b ON b.client_id=c.id ORDER BY c.name")
+        self.fill(self.clients,[(r['id'],(r['id'],r['name'],r['phone'],r['email'] or 'Sin correo',*[r[c] if r['ratings_confirmed'] else 'Sin calificar' for c in ('payment_rating','return_rating','care_rating')],
             money(sum(self.service.payment_summary(rental['id'])['pending_cents'] for rental in self.db.rows('SELECT id FROM rentals WHERE client_id=?',(r['id'],))))))
-            for r in rows if term in r['name'].casefold() or term in r['phone']])
+            for r in rows if term in r['name'].casefold() or term in r['phone'] or term in r['email'].casefold()])
+        if selection and self.clients.exists(selection[0]):self.clients.selection_set(selection[0])
+        self.update_email_selection()
 
     def client_dialog(self,key=None):
         row = self.db.rows('SELECT * FROM clients WHERE id=?',(key,))[0] if key else None
@@ -170,12 +233,16 @@ class Application(ctk.CTk):
         if key:
             addresses=self.db.rows('SELECT address FROM addresses WHERE client_id=? ORDER BY id DESC',(key,))
             ctk.CTkLabel(body,text='Direcciones registradas:\n'+'\n'.join(r['address'] for r in addresses),wraplength=450,justify='left').pack(anchor='w',pady=8)
-        address=self.entry(body,'Agregar dirección de obra (opcional)')
+        from .address_fields import AddressFields
+        ctk.CTkLabel(body,text='Agregar dirección de obra (opcional)').pack(anchor='w',pady=(8,0))
+        address_editor=AddressFields(body)
+        address_editor.pack(fill='x')
+        address=address_editor.value
         def save():
             scores = [v.get() for v in ratings]
             if 'Sin calificar' in scores and scores != ['Sin calificar']*3:
                 raise ValueError('Califica los tres criterios o deja los tres sin calificar.')
-            self.service.save_client(key,name.get(),phone.get(),None if scores == ['Sin calificar']*3 else scores,notes.get('1.0','end-1c'),address.get())
+            self.service.save_client(key,name.get(),phone.get(),None if scores == ['Sin calificar']*3 else scores,notes.get('1.0','end-1c'),address.get(),address_data=address_editor.parts())
             win.destroy()
             self.refresh_clients()
             if key == self.client_id:

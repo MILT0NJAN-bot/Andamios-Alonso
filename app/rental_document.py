@@ -77,8 +77,6 @@ def main_note(db,key,width):
     if rental['vat_bp']:
         totals.append(['IVA 16%',money(rental['vat_cents'])])
     totals.extend([['TOTAL DE RENTA',money(rental['total_cents'])],['PAGADO',money(payment['paid_cents'])],['SALDO PENDIENTE',money(payment['pending_cents'])]])
-    if payment['credit_cents']:
-        totals.append(['SALDO A FAVOR',money(payment['credit_cents'])])
     amount_table=table([[p(label,bold),p(value,bold)] for label,value in totals],[190,100])
     amount_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),PALE),('ALIGN',(1,0),(1,-1),'RIGHT')]))
     amount_table.hAlign='RIGHT'
@@ -87,7 +85,7 @@ def main_note(db,key,width):
     instructions=p('El valor del equipo muestra su costo completo para conocimiento del cliente y cuidado del material. '
         'Es informativo: no se suma a la renta, no es un depósito ni genera un cargo automático. '
         'Al recibir, revisa cantidad, accesorios y estado. Evita usos distintos al previsto y reporta daños o faltantes. '
-        'Las observaciones de entrega y las devoluciones se detallan en el anexo. Esta nota no sustituye un comprobante fiscal.',small)
+        'Las observaciones de entrega y las devoluciones se consultan en el sistema. Esta nota no sustituye un comprobante fiscal.',small)
     story.extend([care,Spacer(1,4),instructions,Spacer(1,8)])
     bank=table([[p(f'{BANK_ACCOUNT_NAME} · {OWNER}',bold)],
         [p(f'Cuenta: {ACCOUNT}   ·   CLABE: {CLABE}   ·   RFC: {RFC}\nNo. de cliente BBVA: {BANK_CLIENT}',small)]],[width])
@@ -95,5 +93,5 @@ def main_note(db,key,width):
     story.extend([bank,Spacer(1,18)])
     signatures=table([[p('________________________________'),p('________________________________')],
         [p('CLIENTE · NOMBRE Y FIRMA',bold),p('ENTREGA · ALONSO',bold)]],[width/2,width/2])
-    story.append(KeepTogether([signatures]))
+    story.append(signatures)
     return story

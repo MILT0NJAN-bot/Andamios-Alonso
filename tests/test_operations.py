@@ -28,7 +28,7 @@ class OperationTests(unittest.TestCase):
 
     def reserve(self,quantity,start=8,duration=7):
         return self.service.create_reservation(self.client,'Obra reservada',(self.today+timedelta(days=start)).isoformat(),
-            (self.today+timedelta(days=start+duration)).isoformat(),{self.item:quantity})
+            (self.today+timedelta(days=start+duration)).isoformat(),{self.item:quantity},_legacy_without_deposit=True)
 
     def test_partial_good_then_bad_closes_once_and_holds_damaged(self):
         key,line=self.rent()
@@ -91,8 +91,8 @@ class OperationTests(unittest.TestCase):
 
     def test_sweep_allows_non_overlapping_reservations_in_same_query(self):
         self.reserve(10,start=8,duration=2)
-        self.reserve(10,start=10,duration=2)
-        self.assertEqual(self.service.period_available(self.item,self.today+timedelta(days=8),self.today+timedelta(days=12)),0)
+        self.reserve(10,start=12,duration=2)
+        self.assertEqual(self.service.period_available(self.item,self.today+timedelta(days=8),self.today+timedelta(days=14)),0)
 
     def test_convert_reserved_prices_once_without_duplicate_stock(self):
         key=self.reserve(4,start=0)
@@ -115,9 +115,9 @@ class OperationTests(unittest.TestCase):
 
     def test_extension_cannot_take_reserved_stock(self):
         rental,_=self.rent(6)
-        self.reserve(7,start=8)
+        self.reserve(7,start=10)
         with self.assertRaises(ValueError):
-            self.service.extend_rental(rental,3)
+            self.service.extend_rental(rental,5)
 
     def test_legacy_closed_rental_stays_closed_on_reopen(self):
         key,_=self.rent()
@@ -147,7 +147,7 @@ class OperationTests(unittest.TestCase):
         with patch.object(self.db,'backup',side_effect=OSError('Disco de prueba lleno')):
             self.assertIsNone(self.db.automatic_backup(force=True))
             self.assertIn('lleno',self.db.backup_error)
-        self.assertEqual(len(self.db.rows('SELECT * FROM items')),7)
+        self.assertEqual(len(self.db.rows('SELECT * FROM items')),10)
 
 
 if __name__=='__main__':

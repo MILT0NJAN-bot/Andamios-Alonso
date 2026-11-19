@@ -118,6 +118,8 @@ class ClientFiles:
 
     def delete_client_document(self, client_id, document_id):
         with self.db.conn:
+            if self.db.rows('SELECT 1 FROM transfer_receipts WHERE document_id=? UNION ALL SELECT 1 FROM reservation_payment_receipts WHERE document_id=?',(document_id,document_id)):
+                raise ValueError('Este comprobante está vinculado a un pago y se conserva como evidencia. Si el pago es incorrecto, anúlalo en Pagos y saldos.')
             cursor = self.db.conn.execute('DELETE FROM client_documents WHERE client_id=? AND id=?',
                                           (client_id, document_id))
             if not cursor.rowcount:

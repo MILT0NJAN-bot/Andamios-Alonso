@@ -38,7 +38,7 @@ def build_workbook(db,rental_id):
     rental = rows[0]
     lines = db.rows('SELECT * FROM rental_lines WHERE rental_id=? ORDER BY id', (rental_id,))
     extensions = db.rows('SELECT * FROM rental_extensions WHERE rental_id=? ORDER BY id', (rental_id,))
-    payments = db.rows('SELECT * FROM payments WHERE rental_id=? ORDER BY id',(rental_id,))
+    payments = db.rows('SELECT * FROM financial_payments WHERE rental_id=? ORDER BY paid_on,id',(rental_id,))
     summary=Service(db).payment_summary(rental_id)
     received=db.rows('SELECT r.*,l.item_name FROM rental_returns r JOIN rental_lines l ON l.id=r.line_id WHERE r.rental_id=? ORDER BY r.id',(rental_id,))
     wb = Workbook()
@@ -123,7 +123,7 @@ def build_workbook(db,rental_id):
         row+=1
     block(row,6,8,'TOTAL DE RENTA · MXN',bold=True,color='FFFFFF',fill=NAVY,height=32,align='right')
     block(row,9,9,rental['total_cents']/100,bold=True,size=13,color='FFFFFF',fill=NAVY,align='right').number_format=MONEY
-    for title,amount in [('PAGADO · MXN',summary['paid_cents']),('SALDO PENDIENTE · MXN',summary['pending_cents']),('SALDO A FAVOR · MXN',summary['credit_cents'])]:
+    for title,amount in [('PAGADO · MXN',summary['paid_cents']),('SALDO PENDIENTE · MXN',summary['pending_cents'])]:
         row+=1
         block(row,6,8,title,bold=True,fill=PALE,height=27,align='right')
         block(row,9,9,amount/100,bold=True,size=12,fill=PALE,align='right').number_format=MONEY

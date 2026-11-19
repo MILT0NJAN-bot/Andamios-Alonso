@@ -1,10 +1,11 @@
 """Interfaz de escritorio basada en la referencia visual de Alonso."""
 import tkinter as tk
+import sqlite3
 from tkinter import ttk, messagebox
 from datetime import date, datetime, timedelta
 import customtkinter as ctk
 from PIL import Image
-from .resources import LOGO_PATH
+from .resources import LOGO_PATH,ICON_PATH
 from .ui import Application as BaseApplication
 from .service import Service, money
 from .calendar_picker import CalendarPicker
@@ -14,6 +15,11 @@ from .charts import BarChart
 from .payments_ui import PaymentsUI
 from .operations_ui import OperationsUI
 from .service import cents
+from .cash_ui import CashUI
+from .transfer_ui import TransferUI
+from .address_fields import AddressFields
+from .recovery_ui import RecoveryUI
+from .reservation_ui import ReservationUI
 
 NAVY = '#203F78'
 ORANGE = '#F47724'
@@ -37,10 +43,10 @@ class Pages:
         return self.frames[name]
 
 
-class Application(OperationsUI,PaymentsUI,BaseApplication):
+class Application(ReservationUI,RecoveryUI,TransferUI,CashUI,OperationsUI,PaymentsUI,BaseApplication):
     def __init__(self, db):
         ctk.CTk.__init__(self)
-        self.db, self.service = db, Service(db)
+        self.db, self.service = db, Service(db,require_cash_open=True)
         self.client_id = None
         self.cart = {}
         self.cart_conditions={}
@@ -49,6 +55,11 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.notified = set()
         self._closing = False
         self.title('Alonso | Control de rentas')
+        if ICON_PATH.exists():
+            self.iconbitmap(str(ICON_PATH))
+            self.after(300,lambda:self.iconbitmap(str(ICON_PATH)))
+        if self.db.path.parent.name == 'prueba_caja':
+            self.title('Alonso | PRUEBA DE CAJA · Datos separados de la versión habitual')
         self.geometry('1360x900')
         self.minsize(1060, 720)
         self.configure(fg_color=BG)
@@ -88,7 +99,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
                             ('Rentas activas', 'Rentas activas'), ('Clientes', 'Clientes'),
                             ('Inventario/Precios', 'Inventario y precios'), ('Historial de Rentas', 'Historial de rentas'),
                             ('Gráficas', 'Gráficas y resultados'), ('Pagos y saldos','Pagos y saldos'),
-                            ('Reservaciones','Reservaciones'),('Respaldos','Respaldos')]:
+                            ('Reservaciones','Reservaciones'),('Caja y gastos','Caja y gastos'),('Comprobantes','Comprobantes'),('Respaldos','Respaldos')]:
             self.tabs.add(name)
             button = ctk.CTkButton(nav_scroll, text=label, height=46, anchor='w', corner_radius=8,
                 fg_color='white', text_color=INK, hover_color='#EAF0F7', font=ctk.CTkFont(size=14),
@@ -107,26 +118,41 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.make_payments()
         self.make_reservations()
         self.make_backups()
+        self.make_cash()
+        self.make_transfer_receipts()
         self.refresh()
+        self.init_recovery()
         self.navigate('Inicio')
         self.tick()
         self.alert_job = self.after(1500, self.check_due)
         self.protocol('WM_DELETE_WINDOW', self.close)
 
     def close(self):
+        if not self.close_client_billing_windows():
+            return
+        try:self.save_rental_draft()
+        except (ValueError,OSError,sqlite3.Error) as exc:
+            messagebox.showerror('No se pudo guardar el borrador',str(exc)+'\nLa ventana seguirá abierta para que puedas revisar la captura.',parent=self)
+            return
         self._closing = True
         if self.db.conn.total_changes:
             self.db.automatic_backup(force=True)
-        for name in ('clock_job', 'alert_job'):
+        for name in ('clock_job', 'alert_job','recovery_job'):
             if hasattr(self, name):
                 self.after_cancel(getattr(self, name))
         super().close()
 
     def tick(self):
+        if getattr(self,'cash_banner_day',None)!=date.today().isoformat():
+            self.refresh_cash_status()
         self.clock.configure(text=datetime.now().strftime('%d/%m/%Y\n%H:%M:%S'))
         self.clock_job = self.after(1000, self.tick)
 
     def navigate(self, name):
+        if name=='Comprobantes':self.refresh_receipt_views()
+        self.refresh_cash_status()
+        if name == 'Caja y gastos':
+            self.safe(self.refresh_cash)
         if name == 'Gráficas' and hasattr(self,'chart_rentals'):
             self.safe(self.refresh_analytics)
         for key, frame in self.tabs.frames.items():
@@ -177,6 +203,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
     def make_dashboard(self):
         page = self.tabs.tab('Inicio')
         self.heading(page, 'Panel principal', 'Disponibilidad, rentas en curso y clientes que requieren seguimiento.')
+        self.make_cash_banner(page)
         cards = ctk.CTkFrame(page, fg_color='transparent')
         cards.pack(fill='x', pady=(0, 18))
         self.stats = []
@@ -236,6 +263,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         left, right = self.pair(customer)
         self.rental_name = self.entry(left, 'Nombre del cliente *')
         self.rental_phone = self.entry(right, 'Teléfono de contacto *')
+        self.rental_email = self.entry(customer, 'Correo del cliente (opcional · para facturación)')
         self._loading_client = False
         self._loaded_client = None
         self.suggestions = ctk.CTkFrame(customer,fg_color='#EDF3FC',corner_radius=8)
@@ -256,7 +284,9 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.address_menu.pack(fill='x', pady=(3, 8))
         self.address_field=ctk.CTkFrame(customer,fg_color='transparent')
         self.address_field.pack(fill='x')
-        self.new_address = self.entry(self.address_field, 'Dirección donde se utilizará el equipo *')
+        self.address_editor=AddressFields(self.address_field)
+        self.address_editor.pack(fill='x')
+        self.new_address=self.address_editor.value
         self.rental_name.trace_add('write',lambda *_:self.suggest('name'))
         self.rental_phone.trace_add('write',lambda *_:self.suggest('phone'))
         equipment = self.panel(scroll, '2. Fechas y equipos de la renta')
@@ -301,7 +331,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
             command=lambda: self.safe(self.remove_cart)).pack(anchor='w', pady=5)
         self.alert = ctk.CTkLabel(equipment, text='', text_color='#B52B27', wraplength=800)
         self.alert.pack(fill='x')
-        payment=self.panel(scroll,'3. Anticipo o pago inicial (opcional)')
+        payment=self.panel(scroll,'3. Pago recibido al registrar la renta (opcional)')
         extras=self.panel(scroll,'Flete y tablones extra (opcionales)')
         left,right=self.pair(extras)
         self.freight=self.entry(left,'Flete acordado - MXN (0 si no aplica)','0.00')
@@ -313,11 +343,15 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.initial_amount=self.entry(left,'Importe recibido · MXN','0.00')
         ctk.CTkLabel(right,text='Método de pago').pack(anchor='w')
         self.initial_method=tk.StringVar(value='Efectivo')
-        ctk.CTkOptionMenu(right,values=['Efectivo','Transferencia','Tarjeta'],variable=self.initial_method,height=40).pack(fill='x',pady=5)
+        self.initial_method_menu=ctk.CTkOptionMenu(right,values=['Efectivo','Transferencia','Tarjeta'],variable=self.initial_method,height=40)
+        self.initial_method_menu.pack(fill='x',pady=5)
+        self.initial_receipt=self.receipt_picker(payment,self.initial_method)
+        def invoice_method(*_):
+            self.initial_method_menu.configure(values=['Transferencia'] if self.invoice_required.get() else ['Efectivo','Transferencia','Tarjeta'])
+            if self.invoice_required.get():self.initial_method.set('Transferencia')
+        self.invoice_required.trace_add('write',invoice_method)
         self.initial_reference=self.entry(payment,'Referencia (opcional)')
         ctk.CTkLabel(payment,text='Deja $0.00 si no ha pagado. El pago y la renta se guardan juntos.',text_color=MUTED).pack(anchor='w')
-        ctk.CTkButton(payment,text='Guardar reservación para estas fechas',height=40,fg_color=NAVY,
-            command=lambda:self.safe(self.reserve_current)).pack(anchor='w',pady=8)
         bottom = ctk.CTkFrame(page, fg_color='white', corner_radius=12)
         bottom.pack(fill='x', pady=(12, 0))
         self.total_label = ctk.CTkLabel(bottom, text='TOTAL: $0.00', text_color=NAVY,
@@ -334,6 +368,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.rate_button.configure(state='disabled')
         self.rental_name.set('')
         self.rental_phone.set('')
+        self.rental_email.set('')
         self.new_address.set('')
         self.address_menu.configure(values=[NEW_ADDRESS])
         self.address_choice.set(NEW_ADDRESS)
@@ -357,6 +392,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
             # Cambiar de identidad no debe sobrescribir al cliente seleccionado antes.
             self._loading_client=True
             self.client_id = None
+            self.rental_email.set('')
             self.rate_button.configure(state='disabled')
             other=self.rental_name if field=='phone' else self.rental_phone
             if other.get()==old['name' if field=='phone' else 'phone']:
@@ -397,6 +433,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         row = self.db.rows('SELECT * FROM clients WHERE id=?', (key,))[0]
         self.rental_name.set(row['name'])
         self.rental_phone.set(row['phone'])
+        self.rental_email.set(self.service.billing_details(key)['email'])
         self.update_reputation(key)
         self.rate_button.configure(state='normal')
         addresses = self.db.rows('SELECT a.*, (SELECT MAX(r.id) FROM rentals r WHERE r.address_id=a.id) last_used FROM addresses a WHERE client_id=? ORDER BY last_used DESC,a.id DESC', (key,))
@@ -441,16 +478,22 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         ctk.CTkButton(body,text='Guardar calificación',height=44,fg_color=ORANGE,command=lambda:self.safe(save)).pack(fill='x',pady=12)
 
     def address_changed(self, value):
-        self.new_address.set('' if value == NEW_ADDRESS else value)
+        self.address_editor.load_saved(self.db,self.client_id,'' if value==NEW_ADDRESS else value)
 
     def confirm_rental(self):
+        if getattr(self,'pending_draft',None):
+            raise ValueError('Hay una captura anterior pendiente. Usa Recuperar renta o Descartar en el aviso antes de registrar otra.')
+        if not self.ensure_cash_open():
+            return
         initial=cents(self.initial_amount.get())
+        if self.initial_receipt.get() and not initial:
+            raise ValueError('Captura el importe del anticipo para guardar su comprobante, o quita el archivo seleccionado.')
         if not messagebox.askyesno('Guardar renta', self.total_label.cget('text')+'\n¿Confirmar los datos y registrar la renta?', parent=self):
             return
         key = self.service.create_rental(self.client_id, self.new_address.get(), self.departure.get(), self.due.get(), self.cart,
-            client_data={'name': self.rental_name.get(), 'phone': self.rental_phone.get()},
-            initial_payment={'amount':self.initial_amount.get(),'method':self.initial_method.get(),'reference':self.initial_reference.get(),'kind':'Anticipo'} if initial else None,
-            delivery_states=self.cart_conditions,invoice_required=self.invoice_required.get(),freight=self.freight.get(),extra_planks=self.extra_planks.get())
+            client_data={'name': self.rental_name.get(), 'phone': self.rental_phone.get(), 'email': self.rental_email.get()},
+            initial_payment={'amount':self.initial_amount.get(),'method':self.initial_method.get(),'reference':self.initial_reference.get(),'kind':'Anticipo','receipt_path':self.initial_receipt.get() or None} if initial else None,
+            delivery_states=self.cart_conditions,invoice_required=self.invoice_required.get(),freight=self.freight.get(),extra_planks=self.extra_planks.get(),address_data=self.address_editor.parts(),clear_draft=True)
         self.cart.clear()
         self.cart_conditions.clear()
         self.reset_client()
@@ -459,6 +502,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
         self.initial_method.set('Efectivo')
         self.freight.set('0.00');self.extra_planks.set('0')
         self.invoice_required.set(False)
+        self.complete_rental_draft()
         self.refresh()
         self.notify_exhausted_stock(key)
         self.show_note(key)
@@ -483,8 +527,25 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
     def make_inventory(self):
         self.heading(self.tabs.tab('Inventario/Precios'), 'Inventario y precios', 'Administra equipos, existencias y tarifas diarias del negocio.')
         super().make_inventory()
+        ctk.CTkButton(self.tabs.tab('Inventario/Precios'),text='Clasificar andamios por tamaño',height=40,fg_color=NAVY,
+            command=lambda:self.safe(self.classify_scaffolds_dialog)).pack(anchor='w',pady=6)
         ctk.CTkButton(self.tabs.tab('Inventario/Precios'),text='Liberar piezas revisadas / reparadas',height=40,fg_color='#18865B',
             command=lambda:self.safe(self.release_dialog)).pack(anchor='w',pady=8)
+
+    def classify_scaffolds_dialog(self):
+        from .database import SCAFFOLD_SIZES
+        source=self.db.rows("SELECT * FROM items WHERE name='Andamios' AND archived=0")
+        if not source or not source[0]['available']:raise ValueError('No hay andamios genéricos disponibles para clasificar. Puedes registrar stock nuevo directamente en cada tamaño.')
+        win,body=self.dialog('Clasificar existencias de andamios')
+        ctk.CTkLabel(body,text=f"Andamios disponibles sin tamaño: {source[0]['available']}",font=ctk.CTkFont(size=19,weight='bold'),text_color=NAVY).pack(pady=12)
+        ctk.CTkLabel(body,text='Indica cuántas piezas corresponden a cada tamaño.\nSe trasladan las existencias sin duplicarlas.\nLas rentas y reservaciones anteriores conservan su equipo original.',justify='left',wraplength=450).pack(pady=8)
+        fields={r['id']:self.entry(body,r['name'],'0') for r in self.db.rows('SELECT * FROM items WHERE archived=0 AND name IN (?,?,?)',SCAFFOLD_SIZES)}
+        def save():
+            try:quantities={key:int(var.get()) for key,var in fields.items()}
+            except ValueError:raise ValueError('Escribe cantidades enteras para cada tamaño.') from None
+            if not messagebox.askyesno('Confirmar clasificación',f'¿Trasladar {sum(quantities.values())} piezas del inventario genérico a sus tamaños?',parent=win):return
+            self.service.classify_scaffolds(quantities);win.destroy();self.refresh()
+        ctk.CTkButton(body,text='Guardar clasificación',height=44,fg_color=ORANGE,command=lambda:self.safe(save)).pack(fill='x',pady=16)
 
     def make_history(self):
         self.heading(self.tabs.tab('Historial de Rentas'), 'Historial de rentas', 'Consulta todas las notas y sus importes actualizados, incluidas las ampliaciones.')
@@ -527,6 +588,10 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
 
     def refresh(self):
         super().refresh()
+        for window in self.winfo_children():
+            if hasattr(window,'refresh_documents'):window.refresh_documents()
+        self.refresh_receipt_views()
+        self.refresh_cash_status()
         self.inventory.tag_configure('exhausted', foreground='#AF3029', background='#FFF1EF')
         for key, item in self.items.items():
             if item['total'] > 0 and item['available'] == 0:
@@ -604,6 +669,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
             return
         for child in self.product_cards.winfo_children():
             child.destroy()
+        self.product_buttons={}
         term=self.product_filter.get().casefold().strip()
         rows=[r for r in self.items.values() if term in r['name'].casefold()]
         for index,row in enumerate(rows):
@@ -621,6 +687,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
                 state='normal' if ready else 'disabled',font=ctk.CTkFont(size=12),
                 command=lambda l=label:self.choose_product(l))
             button.grid(row=index//2,column=index%2,sticky='ew',padx=5,pady=5)
+            self.product_buttons[label]=(button,button.cget('text'))
         if not rows:
             ctk.CTkLabel(self.product_cards,text='No hay equipos con ese nombre.').pack(pady=10)
         self.selected_product.configure(text='Elige un equipo en las tarjetas; los precios pendientes se configuran en Inventario.')
@@ -628,6 +695,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
 
     def choose_product(self,label):
         self.item_choice.set(label)
+        self.mark_selected_product(label)
         row=self.items[self.item_labels[label]]
         state=self.cart_conditions.get(row['id'],{})
         self.delivery_condition.set(state.get('condition','Bueno'))
@@ -679,8 +747,16 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
 
     def choose_product_without_dates(self,label):
         self.item_choice.set(label)
+        self.mark_selected_product(label)
         row=self.items[self.item_labels[label]]
         self.selected_product.configure(text=f"Seleccionado: {row['name']} · {tariff_label(row)}")
+
+    def mark_selected_product(self,label):
+        for value,(button,text) in getattr(self,'product_buttons',{}).items():
+            selected=value==label
+            button.configure(text=('✓ SELECCIONADO · ' if selected else '')+text,
+                fg_color='#DAE7FB' if selected else 'white',
+                border_color=ORANGE if selected else '#D4DEEC',border_width=3 if selected else 1)
 
     def refresh_dashboard(self):
         active = self.db.rows('SELECT * FROM rentals WHERE returned_at IS NULL ORDER BY due,id')
@@ -690,6 +766,9 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
             widget.configure(text=str(value))
         self.dashboard_alert.configure(text=f'   {len(overdue)} rentas vencidas requieren seguimiento. Usa «Consultar alertas».' if overdue
             else '   Sin rentas vencidas. Las devoluciones están al día.')
+        conflicts=self.service.reservation_conflicts()
+        if conflicts:
+            self.dashboard_alert.configure(text=f'   Atención: {len(conflicts)} reservación(es) sin piezas suficientes para su fecha y preparación. Revisa Reservaciones.',wraplength=850)
         if self.db.backup_error:
             self.dashboard_alert.configure(text='   No se pudo crear el respaldo automático. Revisa el apartado Respaldos.')
         self.fill(self.dashboard_table, [(r['id'], (f"{r['id']:06d}", r['client_name'], r['client_phone'], r['due'],
@@ -737,6 +816,7 @@ class Application(OperationsUI,PaymentsUI,BaseApplication):
     def check_due(self):
         if self._closing:
             return
+        self.refresh_reservations()
         self.db.automatic_backup()
         self.refresh_backups()
         self.refresh_dashboard()

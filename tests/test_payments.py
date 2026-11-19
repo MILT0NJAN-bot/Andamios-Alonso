@@ -31,7 +31,7 @@ class PaymentTests(unittest.TestCase):
         summary=self.service.payment_summary(self.key)
         self.assertEqual(summary['paid_cents'],90000)
         self.assertEqual(summary['pending_cents'],0)
-        self.assertEqual(summary['status'],'Liquidada')
+        self.assertEqual(summary['status'],'Pagado')
         self.assertEqual(self.db.rows('SELECT kind FROM payments ORDER BY id DESC')[0][0],'Liquidación')
         self.assertIn('PAGADO: $900.00',self.service.note(self.key))
 
@@ -76,16 +76,18 @@ class PaymentTests(unittest.TestCase):
         self.assertEqual(self.service.payment_summary(self.key)['pending_cents'],45000)
         self.service.return_rental(self.key)
         self.service.record_payment(self.key,'450')
-        self.assertEqual(self.service.payment_summary(self.key)['status'],'Liquidada')
+        self.assertEqual(self.service.payment_summary(self.key)['status'],'Pagado')
 
-    def test_monthly_reduction_shows_credit(self):
+    def test_monthly_reduction_keeps_actual_payments_and_marks_paid(self):
         item=self.db.rows("SELECT id FROM items WHERE name='Andamios'")[0][0]
         self.service.save_item(item,'Andamios',5,'30','scaffold','200','450')
         key=self.service.create_rental(self.client,'Obra','2026-10-01','2026-10-30',{item:1})
         self.service.record_payment(key,'860')
         self.service.extend_rental(key,1)
         summary=self.service.payment_summary(key)
-        self.assertEqual(summary['credit_cents'],41000)
+        self.assertEqual(summary['paid_cents'],86000)
+        self.assertEqual(summary['status'],'Pagado')
+        self.assertNotIn('credit_cents',summary)
         self.assertEqual(summary['pending_cents'],0)
         with self.assertRaises(ValueError):
             self.service.record_payment(key,'1')

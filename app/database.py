@@ -5,6 +5,8 @@ from pathlib import Path
 
 SEEDS = ('Andamios', 'Revolvedoras', 'Bailarinas', 'Rotomartillos de 30 kg', 'Generadores',
          'Vibradores para concreto', 'Tablas para cimbra')
+SCAFFOLD_SIZES=('Andamio chico · 1.50 m de altura','Andamio grande · 2 m de altura',
+                'Andamio banquetero · 0.90 m de ancho × 2 m de altura')
 
 
 def default_path():
@@ -28,6 +30,12 @@ class Database:
                     break
         self.conn.executescript(Path(__file__).with_name('schema.sql').read_text(encoding='utf-8'))
         with self.conn:
+            reservation_columns={r['name'] for r in self.conn.execute('PRAGMA table_info(reservations)')}
+            if 'deposit_required' not in reservation_columns:
+                self.conn.execute('ALTER TABLE reservations ADD COLUMN deposit_required INTEGER NOT NULL DEFAULT 0')
+            item_columns={r['name'] for r in self.conn.execute('PRAGMA table_info(items)')}
+            if 'archived' not in item_columns:
+                self.conn.execute('ALTER TABLE items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1))')
             for table in ('rentals','reservations'):
                 existing={r['name'] for r in self.conn.execute(f'PRAGMA table_info({table})')}
                 for field in ('freight_cents','extra_planks','plank_cents'):
@@ -89,6 +97,19 @@ class Database:
             if not self.conn.execute("SELECT 1 FROM migrations WHERE name='boards_weekly_v1'").fetchone():
                 self.conn.execute("UPDATE items SET pricing_mode='scaffold',price_cents=1000,week_cents=25000,month_cents=0 WHERE name='Tablas para cimbra'")
                 self.conn.execute("INSERT INTO migrations VALUES ('boards_weekly_v1')")
+            if not self.conn.execute("SELECT 1 FROM migrations WHERE name='scaffold_sizes_v1'").fetchone():
+                source=self.conn.execute("SELECT * FROM items WHERE name='Andamios'").fetchone()
+                tariff=(source['price_cents'],source['week_cents'],source['month_cents']) if source else (3000,20000,45000)
+                for name in SCAFFOLD_SIZES:
+                    self.conn.execute("INSERT OR IGNORE INTO items(name,pricing_mode,price_cents,week_cents,month_cents) VALUES (?,'scaffold',?,?,?)",(name,*tariff))
+                self.conn.execute("INSERT INTO migrations VALUES ('scaffold_sizes_v1')")
+            self.conn.execute('''CREATE VIEW IF NOT EXISTS financial_payments AS
+                SELECT p.id,p.rental_id,NULL AS reservation_id,p.amount_cents,p.method,p.paid_on,p.reference,p.kind,p.created_at,p.cancelled_at,p.cancellation_reason,
+                    r.client_id,r.client_name,r.vat_bp,'' AS reservation_status FROM payments p JOIN rentals r ON r.id=p.rental_id
+                UNION ALL
+                SELECT -p.id,r.rental_id,r.id,p.amount_cents,p.method,p.paid_on,p.reference,'Anticipo reservación',p.created_at,p.cancelled_at,p.cancellation_reason,
+                    r.client_id,r.client_name,COALESCE(actual.vat_bp,r.vat_bp),r.status
+                    FROM reservation_payments p JOIN reservations r ON r.id=p.reservation_id LEFT JOIN rentals actual ON actual.id=r.rental_id''')
         self.automatic_backup()
 
     def automatic_backup(self,force=False,today=None):

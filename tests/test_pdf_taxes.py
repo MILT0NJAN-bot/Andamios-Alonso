@@ -35,7 +35,7 @@ class PdfTaxTests(unittest.TestCase):
     def test_new_rental_payments_extension_and_return_use_gross(self):
         key=self.rent(invoice=True)
         self.assertEqual(self.service.payment_summary(key)['total_cents'],23200)
-        self.service.record_payment(key,'100')
+        self.service.record_payment(key,'100','Transferencia')
         self.assertEqual(self.service.payment_summary(key)['pending_cents'],13200)
         self.assertEqual(self.service.extend_rental(key,1)['total_cents'],34800)
         line=self.service.remaining_lines(key)[0]
@@ -45,7 +45,7 @@ class PdfTaxTests(unittest.TestCase):
     def test_historical_note_taxes_explicit_once_keep_payments(self):
         old=Service(self.db,tax_rates=(0,0))
         key=old.create_rental(self.client,'Obra',date.today().isoformat(),(date.today()+timedelta(days=2)).isoformat(),{self.item:1})
-        old.record_payment(key,'200')
+        old.record_payment(key,'200','Transferencia')
         self.assertEqual(self.service.payment_summary(key)['pending_cents'],0)
         self.service.apply_taxes(key)
         self.assertEqual(self.service.payment_summary(key)['paid_cents'],20000)
@@ -55,14 +55,15 @@ class PdfTaxTests(unittest.TestCase):
 
     def test_reservation_uses_tax_snapshot(self):
         start=date.today();end=start+timedelta(days=2)
-        key=self.service.create_reservation(self.client,'Obra',start.isoformat(),end.isoformat(),{self.item:1},invoice_required=True)
+        key=self.service.create_reservation(self.client,'Obra',start.isoformat(),end.isoformat(),{self.item:1},invoice_required=True,_legacy_without_deposit=True)
         rental=Service(self.db,tax_rates=(0,0)).start_reservation(key)
         self.assertEqual(self.service.payment_summary(rental)['total_cents'],23200)
 
     def test_migration_keeps_old_total_and_payments(self):
         old=Service(self.db,tax_rates=(0,0))
         key=old.create_rental(self.client,'Obra',date.today().isoformat(),(date.today()+timedelta(days=2)).isoformat(),{self.item:1})
-        old.record_payment(key,'200')
+        old.record_payment(key,'200','Transferencia')
+        self.db.conn.execute('DROP VIEW financial_payments')
         for table in ('rentals','reservations'):
             for column in ('subtotal_cents','vat_bp','isr_bp','vat_cents','isr_cents'):
                 self.db.conn.execute(f'ALTER TABLE {table} DROP COLUMN {column}')
@@ -78,9 +79,10 @@ class PdfTaxTests(unittest.TestCase):
 
     def test_pdf_contains_table_bank_taxes_and_balances(self):
         key=self.rent(2,invoice=True)
-        self.service.record_payment(key,'100')
+        self.service.record_payment(key,'100','Transferencia')
         path=export_pdf(self.db,key,Path(self.temp.name)/'note.pdf')
         reader=PdfReader(path)
+        self.assertEqual(len(reader.pages),1)
         text='\n'.join(page.extract_text() for page in reader.pages)
         for value in ('PIEZAS','Revolvedoras','AOJM740531IH9','0159067418','012090001590674189','PYME BBVA',
                       'Miguel','IVA 16%','$464.00','$364.00','$50,000.00'):
@@ -90,21 +92,21 @@ class PdfTaxTests(unittest.TestCase):
         for page in reader.pages:
             self.assertAlmostEqual(float(page.mediabox.width),612)
 
-    def test_long_pdf_and_optional_notes_do_not_clip_or_fail(self):
+    def test_pdf_is_one_page_without_return_annex_and_keeps_notes_in_database(self):
         key=self.rent()
         line=self.service.remaining_lines(key)[0]
         self.service.return_partial(key,[{'line_id':line['id'],'quantity':1,'condition':'Malo','notes':'Observación de prueba. '*150}])
         path=export_pdf(self.db,key,Path(self.temp.name)/'long.pdf')
         reader=PdfReader(path)
         text='\n'.join(page.extract_text() for page in reader.pages)
-        self.assertIn('Malo',text)
-        self.assertIn('Observación',text)
-        self.assertGreater(len(reader.pages),1)
+        self.assertNotIn('Observación de prueba',text)
+        self.assertEqual(len(reader.pages),1)
+        self.assertIn('Observación',self.db.rows('SELECT notes FROM rental_returns WHERE line_id=?',(line['id'],))[0][0])
 
     def test_no_invoice_default_and_invoice_toggle_preserves_payments(self):
         key=self.rent()
         self.assertEqual(self.service.payment_summary(key)['total_cents'],20000)
-        self.service.record_payment(key,'200')
+        self.service.record_payment(key,'200','Transferencia')
         self.service.set_invoice(key,True)
         self.assertEqual(self.service.payment_summary(key)['pending_cents'],3200)
         self.service.set_invoice(key,False)
@@ -134,14 +136,14 @@ class PdfTaxTests(unittest.TestCase):
 
     def test_reserved_equipment_value_is_preserved_on_delivery(self):
         start=date.today();end=start+timedelta(days=2)
-        key=self.service.create_reservation(self.client,'Obra',start.isoformat(),end.isoformat(),{self.item:1})
+        key=self.service.create_reservation(self.client,'Obra',start.isoformat(),end.isoformat(),{self.item:1},_legacy_without_deposit=True)
         self.service.save_item(self.item,'Revolvedoras',100,'100','daily',replacement_cost='30000')
         rental=self.service.start_reservation(key)
         self.assertEqual(self.db.rows('SELECT replacement_cents FROM rental_lines WHERE rental_id=?',(rental,))[0][0],2500000)
 
     def test_previous_isr_removed_once_with_audit_and_same_payments(self):
         key=self.rent(invoice=True)
-        self.service.record_payment(key,'100')
+        self.service.record_payment(key,'100','Transferencia')
         self.db.conn.execute('UPDATE rentals SET isr_bp=125,isr_cents=250,total_cents=22950 WHERE id=?',(key,))
         self.db.conn.execute("DELETE FROM migrations WHERE name='optional_vat_no_isr_v1'")
         self.db.conn.commit()
